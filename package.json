@@ -48,6 +48,14 @@
     "start:example": "pnpm --filter example-app dev",
     "build:example": "pnpm --filter example-app build"
   },
+  "module": "./dist/index.js",
   "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
   "types": "./dist/index.d.ts"
 }

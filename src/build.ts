@@ -1,7 +1,9 @@
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
-import { extname, join, relative, dirname, parse } from 'node:path'
+import { extname, join, relative, dirname, parse, isAbsolute } from 'node:path'
 import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from 'node:fs'
 import { GoBuilder } from './interface.js'
+
+const stripQuery = (id: string) => id.split('?')[0].split('#')[0]
 
 const findModuleRoot = (startPath: string): string | null => {
   let dir = startPath
@@ -57,6 +59,7 @@ const getModuleCachePath = (modCache: string, modulePath: string, version: strin
 }
 
 export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> => {
+  const cleanId = stripQuery(id)
   const goBinExe = config.goBinaryPath || 'go'
   // quick availability check
   try {
@@ -68,11 +71,15 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     return Promise.reject(new Error(`go binary not found at ${goBinExe}: ${String(err)}`))
   }
 
-  const fileDir = dirname(id)
+  const fileDir = dirname(cleanId)
   const moduleRoot = findModuleRoot(fileDir)
 
-  const goBuildDir = config.goBuildDir as string
-  const goBinDir = config.goBin || join(goBuildDir, 'bin')
+  let goBuildDir = config.goBuildDir as string
+  // if configured build dir is relative and we have a module root, resolve it inside the module
+  if (goBuildDir && !isAbsolute(goBuildDir) && moduleRoot) {
+    goBuildDir = join(moduleRoot, goBuildDir)
+  }
+  const goBinDir = (config.goBin && (isAbsolute(config.goBin as string) ? config.goBin as string : (moduleRoot ? join(moduleRoot, config.goBin as string) : join(process.cwd(), config.goBin as string)))) || join(goBuildDir as string, 'bin')
   mkdirSync(goBuildDir, { recursive: true })
   mkdirSync(goBinDir, { recursive: true })
 
@@ -80,22 +87,34 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     ...process.env,
     GOPATH: process.env.GOPATH,
     GOROOT: process.env.GOROOT,
-    GOCACHE: join(goBuildDir, '.gocache'),
+    GOCACHE: process.env.GOCACHE, //join(goBuildDir, '.gocache'),
     GOBIN: goBinDir,
     GOOS: 'js',
     GOARCH: 'wasm'
   }
 
+  // debug info: show what we're about to build
+  try {
+    viteConfig.logger.info(
+      `[go-build] request id=${id} cleanId=${cleanId} fileDir=${fileDir} moduleRoot=${moduleRoot} goBuildDir=${goBuildDir} goBinDir=${goBinDir}`
+    )
+  } catch (_) {}
+
   if (moduleRoot) {
     // local module: build package relative to moduleRoot
     const relPkg = relative(moduleRoot, fileDir)
     const pkgArg = relPkg === '' ? '.' : './' + relPkg.replace(/\\/g, '/')
-    const outputPath = join(goBuildDir, relative(process.cwd(), id.replace(extname(id), '') + '.wasm'))
+    const outputPath = join(goBuildDir as string, relative(moduleRoot, cleanId.replace(extname(cleanId), '') + '.wasm'))
     const args = ['build', ...(config.goBuildExtraArgs || []), '-o', outputPath, pkgArg]
 
-    const child = execFile(goBinExe, args, { cwd: moduleRoot, env: envBase }, (err, stdout, stderr) => {
+    // Run build in the package directory to ensure go finds the correct go.mod
+    const cwd = fileDir
+
+    try { viteConfig.logger.info(`[go-build] local build cmd=${goBinExe} args=${JSON.stringify(args)} cwd=${cwd}`) } catch (_) {}
+
+    const child = execFile(goBinExe, args, { cwd, env: envBase }, (err, stdout, stderr) => {
       if (err != null) {
-        viteConfig.logger.error(String(err))
+        viteConfig.logger.error('[go-build] local build error: ' + String(err))
       }
       if (stdout) viteConfig.logger.info(stdout)
       if (stderr) viteConfig.logger.error(stderr)
@@ -121,11 +140,11 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
 
   // remote module flow
   // id could be 'module/path@version' or 'module/path' or a local path — attempt to map
-  let moduleRef = id
+  let moduleRef = cleanId
   // if id ends with .go, try to strip path and treat as module@latest
-  if (id.endsWith('.go')) {
+  if (cleanId.endsWith('.go')) {
     // fallback: try to interpret as module path without file
-    const parts = id.split('/')
+    const parts = cleanId.split('/')
     // remove trailing file
     parts.pop()
     moduleRef = parts.join('/')
@@ -137,8 +156,10 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
   const before = new Set(listWasmFiles(goBinDir))
 
   const installArgs = ['install', ...(config.goInstallArgs || []), moduleRef]
+  try { viteConfig.logger.info(`[go-build] remote install cmd=${goBinExe} args=${JSON.stringify(installArgs)} cwd=${process.cwd()}`) } catch (_) {}
+
   const child = execFile(goBinExe, installArgs, { cwd: process.cwd(), env: envBase }, (err, stdout, stderr) => {
-    if (err != null) viteConfig.logger.error(String(err))
+    if (err != null) viteConfig.logger.error('[go-build] remote install error: ' + String(err))
     if (stdout) viteConfig.logger.info(stdout)
     if (stderr) viteConfig.logger.error(stderr)
   })

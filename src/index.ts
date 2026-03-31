@@ -1,12 +1,15 @@
 import type { PluginOption, ResolvedConfig } from 'vite'
 import type { SourceDescription, TransformPluginContext } from 'rollup'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, join, dirname } from 'node:path'
 
 import { WASM_BRIDGE_ID, WASM_EXEC_ID, readFile } from './dependency.js'
 import { readFile as r } from 'node:fs/promises'
 import { createTempDir } from './temp_dir.js'
 import { buildFile } from './build.js'
 import type { Config } from './interface.js'
+
+const stripQuery = (id: string) => id.split('?')[0].split('#')[0]
+const isGoId = (id: string) => extname(stripQuery(id)) === '.go'
 
 export type { Config, GoBuilder } from './interface.js'
 
@@ -33,6 +36,7 @@ export default (config?: Config) => {
 
   return {
     name: "golang-wasm" as const,
+    enforce: 'pre' as const,
     configResolved(c: any) {
       cfg = c
     },
@@ -59,7 +63,7 @@ export default (config?: Config) => {
       }
 
       if (id == `\0${WASM_BRIDGE_ID}`) {
-        const base = import.meta.url != null ? new URL('artifact/bridge.js', import.meta.url) : join(__filename, "artifact/bridge.js")
+        const base = import.meta.url != null ? new URL('artifact/bridge.js', import.meta.url) : join(dirname(__filename), 'artifact', 'bridge.js')
         return {
           code: await readFile(cfg, base),
           moduleSideEffects: "no-treeshake"
@@ -67,7 +71,7 @@ export default (config?: Config) => {
       }
 
       // skip if not loading go
-      if (extname(id) != ".go") {
+      if (!isGoId(id)) {
         return
       }
 
@@ -76,7 +80,7 @@ export default (config?: Config) => {
     },
     async transform(this: any, code, id): Promise<string | undefined> {
       // skip if not loading go
-      if (extname(id) != ".go") {
+      if (!isGoId(id)) {
         return
       }
 
@@ -88,27 +92,29 @@ export default (config?: Config) => {
           name: basename(id, ".go") + ".wasm",
           source: await r(wasmPath)
         })
-        const read = async () => readFile(cfg, wasmPath, undefined) as unknown as Buffer
+        // Important: read WASM as binary, not utf-8 text.
+        const read = async () => await r(wasmPath)
 
         if(config?.transform != null) {
           return config.transform(cfg.command, emit, read)
         }
 
-        const content = cfg.command == 'build' ? 
-          `import.meta.ROLLUP_FILE_URL_` + await emit() :
-          `data:application/wasm;base64,` + Buffer.from(await read()).toString("base64")
+        const contentExpr = cfg.command == 'build'
+          ? `import.meta.ROLLUP_FILE_URL_` + await emit()
+          : JSON.stringify(`data:application/wasm;base64,` + Buffer.from(await read()).toString("base64"))
 
         return `
           import '${WASM_EXEC_ID}';
           import goWasm from '${WASM_BRIDGE_ID}';
-          
-          const wasm = fetch(${content}).then(r => r.arrayBuffer());
+
+          const wasm = fetch(${contentExpr}).then(r => r.arrayBuffer());
           export default await goWasm(wasm);
         `
       } catch (e) {
         cfg.logger.error(`fail to build wasm for: ${id}`, {
           error: e as Error
         })
+        throw e
       }
 
       return
