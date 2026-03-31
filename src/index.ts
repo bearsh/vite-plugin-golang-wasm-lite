@@ -1,6 +1,8 @@
 import type { PluginOption, ResolvedConfig } from 'vite'
 import type { SourceDescription, TransformPluginContext } from 'rollup'
 import { basename, join, dirname, resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 
 import { WASM_BRIDGE_ID, WASM_EXEC_ID, readFile } from './dependency.js'
 import { readFile as r } from 'node:fs/promises'
@@ -42,18 +44,25 @@ export default (config?: Config) => {
 
   let cfg: ResolvedConfig
 
-  if (finalConfig.wasmExecPath == null) {
-    if (process.env.GOROOT == null) {
-      throw new Error("GOROOT is not set and no wasm exec path provided!")
-    }
-    finalConfig.wasmExecPath = join(process.env.GOROOT as string, "misc", "wasm", "wasm_exec.js")
+  if (finalConfig.goBinaryPath == null) {
+    const goroot = process.env.GOROOT
+    finalConfig.goBinaryPath = goroot != null ? join(goroot, 'bin', 'go') : 'go'
   }
 
-  if (finalConfig.goBinaryPath == null) {
-    if (process.env.GOROOT == null) {
-      throw new Error("GOROOT is not set and no go binary path provided!")
+  if (finalConfig.wasmExecPath == null) {
+    let goroot = process.env.GOROOT
+    if (goroot == null) {
+      try {
+        goroot = execFileSync(finalConfig.goBinaryPath, ['env', 'GOROOT']).toString().trim() || undefined
+      } catch (_) {}
     }
-    finalConfig.goBinaryPath = join(process.env.GOROOT as string, "bin", "go")
+    if (goroot == null) {
+      throw new Error('GOROOT could not be determined – set GOROOT or provide wasmExecPath in the plugin config')
+    }
+    // Go ≤1.20 ships wasm_exec.js under misc/wasm, Go ≥1.21 under lib/wasm
+    const miscPath = join(goroot, 'misc', 'wasm', 'wasm_exec.js')
+    const libPath  = join(goroot, 'lib',  'wasm', 'wasm_exec.js')
+    finalConfig.wasmExecPath = existsSync(libPath) ? libPath : miscPath
   }
 
   return {

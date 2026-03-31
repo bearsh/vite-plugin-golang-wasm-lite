@@ -42,6 +42,18 @@ const listBuildArtifacts = (dir: string) => {
   }
 }
 
+const GO_ENV_VARS = ['GOPATH', 'GOROOT', 'GOCACHE', 'GOMODCACHE'] as const
+type GoEnvKey = typeof GO_ENV_VARS[number]
+
+const queryGoEnv = (goBinExe: string): Record<GoEnvKey, string> => {
+  try {
+    const out = execFileSync(goBinExe, ['env', ...GO_ENV_VARS]).toString().trim().split('\n')
+    return Object.fromEntries(GO_ENV_VARS.map((k, i) => [k, out[i]?.trim() ?? ''])) as Record<GoEnvKey, string>
+  } catch (_) {
+    return Object.fromEntries(GO_ENV_VARS.map(k => [k, ''])) as Record<GoEnvKey, string>
+  }
+}
+
 const getModuleCachePath = (modCache: string, modulePath: string, version: string): string | null => {
   const parts = modulePath.split('/')
   const last = parts.pop() as string
@@ -78,7 +90,10 @@ const getModuleCachePath = (modCache: string, modulePath: string, version: strin
 
 export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> => {
   const cleanId = stripQuery(id)
-  const goBinExe = config.goBinaryPath || 'go'
+  if (!config.goBinaryPath) {
+    return Promise.reject(new Error('goBinaryPath must be set in config (should be resolved by the plugin setup)'))
+  }
+  const goBinExe = config.goBinaryPath
   // quick availability check
   try {
     const check = spawnSync(goBinExe, ['version'])
@@ -95,6 +110,9 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
   if (!isLocalTarget && !isRemoteTarget) {
     return Promise.reject(new Error(`unsupported go target: ${id}`))
   }
+
+  // Query all needed Go env vars in one call; prefer values already set in process.env.
+  const goEnv = queryGoEnv(goBinExe)
 
   const packageDir = isLocalTarget ? cleanId.slice(GO_LOCAL_ID_PREFIX.length) : ''
   const fileDir = isLocalTarget ? packageDir : process.cwd()
@@ -118,9 +136,10 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
 
   const envBase: any = {
     ...process.env,
-    GOPATH: process.env.GOPATH,
-    GOROOT: process.env.GOROOT,
-    GOCACHE: process.env.GOCACHE, //join(goBuildDir, '.gocache'),
+    GOPATH:    process.env.GOPATH    || goEnv.GOPATH    || undefined,
+    GOROOT:    process.env.GOROOT    || goEnv.GOROOT    || undefined,
+    GOCACHE:   process.env.GOCACHE   || goEnv.GOCACHE   || undefined,
+    GOMODCACHE: process.env.GOMODCACHE || goEnv.GOMODCACHE || undefined,
     GOOS: 'js',
     GOARCH: 'wasm'
   }
@@ -222,7 +241,7 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
         // copy d.ts from module cache if requested
         if (config.copyDts !== false) {
           try {
-            const modCache = execFileSync(goBinExe, ['env', 'GOMODCACHE']).toString().trim()
+            const modCache = envBase.GOMODCACHE || goEnv.GOMODCACHE
             const [modPath, ver] = moduleRef.split('@')
             const version = ver || 'latest'
             const cachePath = getModuleCachePath(modCache, modPath, version)
@@ -240,7 +259,7 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
         // attempt to copy d.ts from module cache even if wasm not detected
         if (config.copyDts !== false) {
           try {
-            const modCache = execFileSync(goBinExe, ['env', 'GOMODCACHE']).toString().trim()
+            const modCache = envBase.GOMODCACHE || goEnv.GOMODCACHE
             const [modPath, ver] = moduleRef.split('@')
             const version = ver || 'latest'
             const cachePath = getModuleCachePath(modCache, modPath, version)
