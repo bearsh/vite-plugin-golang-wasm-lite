@@ -20,7 +20,8 @@ const bridge = __go_wasm__ as any
 export default async function (bytes: BufferSource | Promise<BufferSource>) {
   // @ts-expect-error
   const go = new Go()
-  const result = await WebAssembly.instantiate(await bytes, go.importObject) 
+  const result = await WebAssembly.instantiate(await bytes, go.importObject)
+  bridge.__instance__ = result.instance
   go.run(result.instance)
 
   setTimeout(() => {
