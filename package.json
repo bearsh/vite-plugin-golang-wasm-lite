@@ -42,7 +42,10 @@
   },
   "scripts": {
     "build": "rimraf dist && tsc && npm run build:bridge",
-    "build:bridge": "esbuild src/bridge.ts --bundle --outfile=dist/artifact/bridge.js --format=esm"
+    "build:bridge": "esbuild src/bridge.ts --bundle --outfile=dist/artifact/bridge.js --format=esm",
+    "bootstrap": "pnpm install",
+    "start:example": "pnpm --filter example-app dev",
+    "build:example": "pnpm --filter example-app build"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts"

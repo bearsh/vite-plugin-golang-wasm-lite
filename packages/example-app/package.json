@@ -1,0 +1,14 @@
+{
+  "name": "example-app",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "vite"
+  },
+  "dependencies": {
+    "vite-plugin-golang-wasm-lite": "workspace:*",
+    "vite": "^5.0.0"
+  }
+}
