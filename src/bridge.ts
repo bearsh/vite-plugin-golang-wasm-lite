@@ -17,18 +17,6 @@ if(typeof __go_wasm__ == "undefined") {
 // @ts-expect-error
 const bridge = __go_wasm__ as any
 
-function wrapper(goFunc: Function) {
-  return (...args: any[]) => {
-    const result = goFunc.apply(undefined, args)
-    if (result.error instanceof Error) {
-      throw result.error
-    }
-    return result.result
-  }
-}
-
-bridge.__wrapper__ = wrapper
-
 export default async function (bytes: BufferSource | Promise<BufferSource>) {
   // @ts-expect-error
   const go = new Go()
@@ -49,8 +37,7 @@ export default async function (bytes: BufferSource | Promise<BufferSource>) {
 
   return new Proxy({}, {
     get(_, key) {
-      if(typeof bridge[key] === 'function')
-        return (...args: any[]) => bridge[key].apply(undefined, args)
+      // here we can handle special properties if we would ever like
       return bridge[key]
     },
   })
