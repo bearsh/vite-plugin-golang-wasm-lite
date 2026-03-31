@@ -1,6 +1,6 @@
 import type { PluginOption, ResolvedConfig } from 'vite'
 import type { SourceDescription, TransformPluginContext } from 'rollup'
-import { basename, extname, join, dirname } from 'node:path'
+import { basename, join, dirname, resolve } from 'node:path'
 
 import { WASM_BRIDGE_ID, WASM_EXEC_ID, readFile } from './dependency.js'
 import { readFile as r } from 'node:fs/promises'
@@ -8,8 +8,30 @@ import { createTempDir } from './temp_dir.js'
 import { buildFile } from './build.js'
 import type { Config } from './interface.js'
 
+const GO_PREFIX = 'go:'
+const GO_LOCAL_ID_PREFIX = '\0go:local:'
+const GO_REMOTE_ID_PREFIX = '\0go:remote:'
+
 const stripQuery = (id: string) => id.split('?')[0].split('#')[0]
-const isGoId = (id: string) => extname(stripQuery(id)) === '.go'
+const isGoImport = (id: string) => stripQuery(id).startsWith(GO_PREFIX)
+const isGoResolvedId = (id: string) => id.startsWith(GO_LOCAL_ID_PREFIX) || id.startsWith(GO_REMOTE_ID_PREFIX)
+const isLocalGoImport = (source: string) => {
+  const request = stripQuery(source).slice(GO_PREFIX.length)
+  return request.startsWith('./') || request.startsWith('../') || request.startsWith('/')
+}
+const getGoAssetName = (id: string) => {
+  if (id.startsWith(GO_LOCAL_ID_PREFIX)) {
+    return `${basename(id.slice(GO_LOCAL_ID_PREFIX.length))}.wasm`
+  }
+
+  if (id.startsWith(GO_REMOTE_ID_PREFIX)) {
+    const moduleRef = id.slice(GO_REMOTE_ID_PREFIX.length)
+    const noVersion = moduleRef.split('@')[0]
+    return `${basename(noVersion)}.wasm`
+  }
+
+  return 'module.wasm'
+}
 
 export type { Config, GoBuilder } from './interface.js'
 
@@ -40,7 +62,7 @@ export default (config?: Config) => {
     configResolved(c: any) {
       cfg = c
     },
-    async resolveId(this: any, source): Promise<string | undefined> {
+    async resolveId(this: any, source, importer): Promise<string | undefined> {
       if (source == WASM_EXEC_ID) {
         return `\0${WASM_EXEC_ID}`
       }
@@ -48,6 +70,19 @@ export default (config?: Config) => {
       if (source == WASM_BRIDGE_ID) {
         return `\0${WASM_BRIDGE_ID}`
       }
+
+      if (!isGoImport(source)) {
+        return
+      }
+
+      const request = stripQuery(source).slice(GO_PREFIX.length)
+      if (isLocalGoImport(source)) {
+        const importerDir = importer != null ? dirname(stripQuery(importer)) : cfg.root
+        const resolvedPath = request.startsWith('/') ? request : resolve(importerDir, request)
+        return `${GO_LOCAL_ID_PREFIX}${resolvedPath}`
+      }
+
+      return `${GO_REMOTE_ID_PREFIX}${request}`
     },
     async options(this: any) {
       if (finalConfig.goBuildDir == null) {
@@ -70,8 +105,7 @@ export default (config?: Config) => {
         }
       }
 
-      // skip if not loading go
-      if (!isGoId(id)) {
+      if (!isGoResolvedId(id)) {
         return
       }
 
@@ -79,8 +113,7 @@ export default (config?: Config) => {
       return ``
     },
     async transform(this: any, code, id): Promise<string | undefined> {
-      // skip if not loading go
-      if (!isGoId(id)) {
+      if (!isGoResolvedId(id)) {
         return
       }
 
@@ -89,7 +122,7 @@ export default (config?: Config) => {
         const wasmPath = await builder(cfg, finalConfig, id)
         const emit = async () => (this.emitFile as TransformPluginContext['emitFile'])({
           type: "asset",
-          name: basename(id, ".go") + ".wasm",
+          name: getGoAssetName(id),
           source: await r(wasmPath)
         })
         // Important: read WASM as binary, not utf-8 text.

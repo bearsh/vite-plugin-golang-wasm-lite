@@ -73,13 +73,13 @@ func main() {
 
 ```
 
-Then, import it from anywhere in source code:
+Then, import the Go package from anywhere in source code using the `go:` prefix:
 
 ```ts
 // ./src/app.tsx
 import { component$, useSignal } from '@builder.io/qwik'
 // ...
-import math from './math/math.go'
+import math from 'go:./math'
 
 export const App = component$(() => {
   const count = useSignal(0)
@@ -107,20 +107,22 @@ export const App = component$(() => {
 
 It's actually possible to generate typescript definition from Go source code since the official Go repository already offered [set of tools](https://pkg.go.dev/go) to work with Go source code such as parser, scanner, AST types, etc. However, I don't think I have the time to actually implement that, given the size and scope of the feature.
 
-Instead, each module needs to be defined via a Typescript's declaration file. Reusing math example from above, we can create declaration file for `./math/math.go` file, like this:
+Instead, each module needs to be defined via a Typescript declaration. With the `go:` import prefix, the simplest approach is an ambient module declaration. Reusing the math example from above:
 
 ```ts
-// ./math/math.go.d.ts
-const __default: {
-  add: (x: number, y: number) => Promise<number>
-}
+// ./src/go-modules.d.ts
+declare module 'go:./math' {
+  const __default: {
+    add: (x: number, y: number) => Promise<number>
+  }
 
-export default __default
+  export default __default
+}
 ```
 
 ## How it works
 
-Essentially, this plugin will transform each "imported" Go file into JS code which only contains codes for loading WASM. By default, the code will be bundled (as asset) or inlined (as base64 data) and then loaded via fetch call:
+Essentially, this plugin will transform each `go:` import into JS code which only contains code for loading WASM. By default, the code will be bundled (as asset) or inlined (as base64 data) and then loaded via fetch call:
 
 ```ts
 import '/@id/__x00__virtual:wasm_exec'
@@ -231,11 +233,11 @@ export default defineConfig({
 
 #### Local vs Remote builds
 
-This plugin supports two build modes when transforming a Go import:
+This plugin supports two build modes when transforming a `go:` import:
 
-- Local module: if the imported `.go` file lives inside a directory with a `go.mod` (or in a subdirectory), the plugin will run `go build` from the module root for the package containing the file. The produced `.wasm` will be written into `goBuildDir` and any `*.go.d.ts` files next to the Go file are copied alongside the `.wasm` output.
+- Local module: `import math from 'go:./math'` means "build the Go package in `./math`". The plugin finds the nearest `go.mod`, runs `go build` for that package, writes the resulting `.wasm` into `goBuildDir`, and copies package-local `*.go.d.ts` or `*.go.ts.d` files alongside the output when present.
 
-- Remote module: if no `go.mod` can be found for the imported file, the plugin will try to treat the import as a module path and run `go install <module>@<version>` (uses `@latest` when no version is specified). The plugin sets `GOBIN` to a configurable location so the produced artifact lands in a known folder.
+- Remote module: `import tool from 'go:github.com/owner/repo/cmd/tool@v1.2.3'` makes the plugin run `go install <module>@<version>`. If no version is specified, it uses `@latest`. The plugin sets `GOBIN` to a configurable location so the produced artifact lands in a known folder.
 
 Configuration options added to support this behavior:
 

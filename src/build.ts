@@ -1,8 +1,10 @@
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
-import { extname, join, relative, dirname, parse, isAbsolute } from 'node:path'
+import { basename, join, relative, dirname, parse, isAbsolute } from 'node:path'
 import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from 'node:fs'
 import { GoBuilder } from './interface.js'
 
+const GO_LOCAL_ID_PREFIX = '\0go:local:'
+const GO_REMOTE_ID_PREFIX = '\0go:remote:'
 const stripQuery = (id: string) => id.split('?')[0].split('#')[0]
 
 const findModuleRoot = (startPath: string): string | null => {
@@ -19,6 +21,22 @@ const findModuleRoot = (startPath: string): string | null => {
 const listWasmFiles = (dir: string) => {
   try {
     return readdirSync(dir).filter(f => f.endsWith('.wasm'))
+  } catch (_) {
+    return []
+  }
+}
+
+const listBuildArtifacts = (dir: string) => {
+  try {
+    return readdirSync(dir).filter(f => {
+      if (f.endsWith('.go.d.ts') || f.endsWith('.go.ts.d')) return false
+      if (f.startsWith('.')) return false
+      try {
+        return statSync(join(dir, f)).isFile()
+      } catch (_) {
+        return false
+      }
+    })
   } catch (_) {
     return []
   }
@@ -71,15 +89,30 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     return Promise.reject(new Error(`go binary not found at ${goBinExe}: ${String(err)}`))
   }
 
-  const fileDir = dirname(cleanId)
-  const moduleRoot = findModuleRoot(fileDir)
+  const isLocalTarget = cleanId.startsWith(GO_LOCAL_ID_PREFIX)
+  const isRemoteTarget = cleanId.startsWith(GO_REMOTE_ID_PREFIX)
+
+  if (!isLocalTarget && !isRemoteTarget) {
+    return Promise.reject(new Error(`unsupported go target: ${id}`))
+  }
+
+  const packageDir = isLocalTarget ? cleanId.slice(GO_LOCAL_ID_PREFIX.length) : ''
+  const fileDir = isLocalTarget ? packageDir : process.cwd()
+  const moduleRoot = isLocalTarget ? findModuleRoot(packageDir) : null
+
+  const projectRoot = viteConfig.root || process.cwd()
 
   let goBuildDir = config.goBuildDir as string
-  // if configured build dir is relative and we have a module root, resolve it inside the module
-  if (goBuildDir && !isAbsolute(goBuildDir) && moduleRoot) {
-    goBuildDir = join(moduleRoot, goBuildDir)
+  // relative dirs are resolved against the Vite project root, not the nested Go module root
+  if (goBuildDir && !isAbsolute(goBuildDir)) {
+    goBuildDir = join(projectRoot, goBuildDir)
   }
-  const goBinDir = (config.goBin && (isAbsolute(config.goBin as string) ? config.goBin as string : (moduleRoot ? join(moduleRoot, config.goBin as string) : join(process.cwd(), config.goBin as string)))) || join(goBuildDir as string, 'bin')
+  const goBinDir =
+    (config.goBin &&
+      (isAbsolute(config.goBin as string)
+        ? (config.goBin as string)
+        : join(projectRoot, config.goBin as string))) ||
+    join(goBuildDir as string, 'bin')
   mkdirSync(goBuildDir, { recursive: true })
   mkdirSync(goBinDir, { recursive: true })
 
@@ -88,7 +121,6 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     GOPATH: process.env.GOPATH,
     GOROOT: process.env.GOROOT,
     GOCACHE: process.env.GOCACHE, //join(goBuildDir, '.gocache'),
-    GOBIN: goBinDir,
     GOOS: 'js',
     GOARCH: 'wasm'
   }
@@ -100,15 +132,22 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     )
   } catch (_) {}
 
-  if (moduleRoot) {
+  if (isLocalTarget && !moduleRoot) {
+    return Promise.reject(new Error(`no go.mod found for local go package: ${packageDir}`))
+  }
+
+  if (moduleRoot && isLocalTarget) {
     // local module: build package relative to moduleRoot
-    const relPkg = relative(moduleRoot, fileDir)
+    const relPkg = relative(moduleRoot, packageDir)
     const pkgArg = relPkg === '' ? '.' : './' + relPkg.replace(/\\/g, '/')
-    const outputPath = join(goBuildDir as string, relative(moduleRoot, cleanId.replace(extname(cleanId), '') + '.wasm'))
+    const relFromRoot = relative(projectRoot, packageDir)
+    const outputName = `${relFromRoot.replace(/\\/g, '/')}.wasm`
+    const outputPath = join(goBuildDir as string, outputName)
+    mkdirSync(dirname(outputPath), { recursive: true })
     const args = ['build', ...(config.goBuildExtraArgs || []), '-o', outputPath, pkgArg]
 
     // Run build in the package directory to ensure go finds the correct go.mod
-    const cwd = fileDir
+    const cwd = packageDir
 
     try { viteConfig.logger.info(`[go-build] local build cmd=${goBinExe} args=${JSON.stringify(args)} cwd=${cwd}`) } catch (_) {}
 
@@ -126,9 +165,9 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
         // copy .go.d.ts files if requested
         if (config.copyDts !== false) {
           try {
-            const files = readdirSync(fileDir).filter(f => f.endsWith('.go.d.ts'))
+            const files = readdirSync(packageDir).filter(f => f.endsWith('.go.d.ts') || f.endsWith('.go.ts.d'))
             for (const f of files) {
-              copyFileSync(join(fileDir, f), join(dirname(outputPath), f))
+              copyFileSync(join(packageDir, f), join(dirname(outputPath), f))
             }
           } catch (_) {}
         }
@@ -140,25 +179,29 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
 
   // remote module flow
   // id could be 'module/path@version' or 'module/path' or a local path — attempt to map
-  let moduleRef = cleanId
-  // if id ends with .go, try to strip path and treat as module@latest
-  if (cleanId.endsWith('.go')) {
-    // fallback: try to interpret as module path without file
-    const parts = cleanId.split('/')
-    // remove trailing file
-    parts.pop()
-    moduleRef = parts.join('/')
-  }
+  let moduleRef = cleanId.slice(GO_REMOTE_ID_PREFIX.length)
   // ensure version
   if (!moduleRef.includes('@')) moduleRef = moduleRef + '@latest'
+  const modulePathOnly = moduleRef.split('@')[0]
+  const moduleCmdName = modulePathOnly.split('/').pop() || 'module'
 
-  // record existing wasm files in goBinDir to detect new ones
-  const before = new Set(listWasmFiles(goBinDir))
+  // Cross-compiled `go install` cannot run with GOBIN set.
+  // Force a deterministic install location under goBuildDir via GOPATH/bin/js_wasm.
+  const remoteWasmDir = join(goBuildDir as string, 'bin', 'js_wasm')
+  mkdirSync(remoteWasmDir, { recursive: true })
+  const envRemote: any = {
+    ...envBase,
+    GOPATH: goBuildDir,
+    GOBIN: undefined
+  }
+
+  // record existing build artifacts to detect newly installed outputs
+  const before = new Set(listBuildArtifacts(remoteWasmDir))
 
   const installArgs = ['install', ...(config.goInstallArgs || []), moduleRef]
   try { viteConfig.logger.info(`[go-build] remote install cmd=${goBinExe} args=${JSON.stringify(installArgs)} cwd=${process.cwd()}`) } catch (_) {}
 
-  const child = execFile(goBinExe, installArgs, { cwd: process.cwd(), env: envBase }, (err, stdout, stderr) => {
+  const child = execFile(goBinExe, installArgs, { cwd: process.cwd(), env: envRemote }, (err, stdout, stderr) => {
     if (err != null) viteConfig.logger.error('[go-build] remote install error: ' + String(err))
     if (stdout) viteConfig.logger.info(stdout)
     if (stderr) viteConfig.logger.error(stderr)
@@ -167,11 +210,15 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
   return new Promise((resolve, reject) => {
     child.once('exit', (code) => {
       if (code !== 0) return reject(new Error(`go install exit with code: ${code}`))
-      // find new wasm in goBinDir
-      const after = listWasmFiles(goBinDir)
+      // find newly installed artifact in cross-compiled install dir
+      const after = listBuildArtifacts(remoteWasmDir)
       const added = after.filter(f => !before.has(f))
       if (added.length > 0) {
-        const found = join(goBinDir, added[0])
+        const preferred = added.find(f => f === moduleCmdName)
+          || added.find(f => f === `${moduleCmdName}.wasm`)
+          || added.find(f => f.endsWith('.wasm'))
+          || added[0]
+        const found = join(remoteWasmDir, preferred)
         // copy d.ts from module cache if requested
         if (config.copyDts !== false) {
           try {
@@ -181,14 +228,15 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
             const cachePath = getModuleCachePath(modCache, modPath, version)
             if (cachePath && existsSync(cachePath)) {
               const dts = readdirSync(cachePath).filter(f => f.endsWith('.go.d.ts'))
-              for (const f of dts) copyFileSync(join(cachePath, f), join(goBinDir, f))
+              for (const f of dts) copyFileSync(join(cachePath, f), join(remoteWasmDir, f))
             }
           } catch (_) {}
         }
         resolve(found)
       } else {
-        // fallback: if no wasm found, resolve to path under goBinDir named after module
-        const fallbackName = moduleRef.split('/').pop() || 'module'
+        // fallback: resolve to likely output names under js_wasm dir
+        const fallbackNoExt = join(remoteWasmDir, moduleCmdName)
+        const fallbackWasm = join(remoteWasmDir, moduleCmdName + '.wasm')
         // attempt to copy d.ts from module cache even if wasm not detected
         if (config.copyDts !== false) {
           try {
@@ -198,11 +246,11 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
             const cachePath = getModuleCachePath(modCache, modPath, version)
             if (cachePath && existsSync(cachePath)) {
               const dts = readdirSync(cachePath).filter(f => f.endsWith('.go.d.ts'))
-              for (const f of dts) copyFileSync(join(cachePath, f), join(goBinDir, f))
+              for (const f of dts) copyFileSync(join(cachePath, f), join(remoteWasmDir, f))
             }
           } catch (_) {}
         }
-        resolve(join(goBinDir, fallbackName + '.wasm'))
+        resolve(existsSync(fallbackNoExt) ? fallbackNoExt : fallbackWasm)
       }
     })
     child.once('error', (err) => reject(err))
