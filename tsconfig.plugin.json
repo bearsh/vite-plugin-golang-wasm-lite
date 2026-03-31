@@ -1,0 +1,11 @@
+{
+  "extends": "@tsconfig/node-lts/tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "emitDeclarationOnly": false,
+    "outDir": "dist",
+    "esModuleInterop": true,
+    "lib": ["DOM"]
+  },
+  "include": ["src/**/*"]
+}

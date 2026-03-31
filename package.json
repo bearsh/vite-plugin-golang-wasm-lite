@@ -41,7 +41,8 @@
     "vite": "^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0"
   },
   "scripts": {
-    "build": "rimraf dist && tsc && npm run build:bridge",
+    "build": "rimraf dist && tsc -p tsconfig.plugin.json && npm run build:bridge",
+    "build:plugin": "rimraf dist && tsc -p tsconfig.plugin.json && npm run build:bridge",
     "build:bridge": "esbuild src/bridge.ts --bundle --outfile=dist/artifact/bridge.js --format=esm",
     "bootstrap": "pnpm install",
     "start:example": "pnpm --filter example-app dev",
