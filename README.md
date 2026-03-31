@@ -110,7 +110,7 @@ It's actually possible to generate typescript definition from Go source code sin
 Instead, each module needs to be defined via a Typescript declaration. With the `go:` import prefix, the simplest approach is an ambient module declaration. Reusing the math example from above:
 
 ```ts
-// ./src/go-modules.d.ts
+// ./src/math/go-modules.d.ts
 declare module 'go:./math' {
   const __default: {
     add: (x: number, y: number) => Promise<number>
