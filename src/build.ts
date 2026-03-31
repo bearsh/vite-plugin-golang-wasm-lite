@@ -163,7 +163,7 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     const outputName = `${relFromRoot.replace(/\\/g, '/')}.wasm`
     const outputPath = join(goBuildDir as string, outputName)
     mkdirSync(dirname(outputPath), { recursive: true })
-    const args = ['build', ...(config.goBuildExtraArgs || []), '-o', outputPath, pkgArg]
+    const args = ['build', ...(config.goArgs || []), '-o', outputPath, pkgArg]
 
     // Run build in the package directory to ensure go finds the correct go.mod
     const cwd = packageDir
@@ -217,7 +217,7 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
   // record existing build artifacts to detect newly installed outputs
   const before = new Set(listBuildArtifacts(remoteWasmDir))
 
-  const installArgs = ['install', ...(config.goInstallArgs || []), moduleRef]
+  const installArgs = ['install', ...(config.goArgs || []), moduleRef]
   try { viteConfig.logger.info(`[go-build] remote install cmd=${goBinExe} args=${JSON.stringify(installArgs)} cwd=${process.cwd()}`) } catch (_) {}
 
   const child = execFile(goBinExe, installArgs, { cwd: process.cwd(), env: envRemote }, (err, stdout, stderr) => {

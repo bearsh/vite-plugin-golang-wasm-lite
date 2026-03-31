@@ -202,7 +202,7 @@ Must be noted, however, that it's not recommended to point `goBinaryPath` to oth
 `${binary} build ${optional_extra_args} -o ${output_path} ${input_path}`
 ```
 
-For example, you can use `tinygo` compiler instead, by pointing `goBinaryPath` to `tinygo` path. Other extra argument such as `--target` can be added via `goBuildExtraArgs`.
+For example, you can use `tinygo` compiler instead, by pointing `goBinaryPath` to `tinygo` path. Other extra arguments such as `--target` can be added via `goArgs`.
 
 #### goBuildDir, buildGoFile
 
@@ -214,15 +214,15 @@ https://github.com/slainless/vite-plugin-golang-wasm/blob/f48063ef18a79ec364244c
 
 This option can be used to set custom build directive when more control is needed.
 
-#### goBuildExtraArgs
+#### goArgs
 
-`goBuildExtraArgs` allows you to add extra arguments and/or flags to the build call. For example, if your go codebase is in a subdirectory and you need to indicate to the compiler where is the go.mod file, you can provide extra `-C` flag to the build call:
+`goArgs` allows you to add extra arguments and/or flags to both the build and install calls. For example, you can use `-tags` to enable build tags or `-ldflags` to pass linker flags:
 
 ```ts
 export default defineConfig({
   plugins: [
     goWasm({
-      goBuildExtraArgs: ["-C", "./path/to/go.mod/directory"]
+      goArgs: ["-tags", "mytag", "-ldflags", "-s -w"]
     }),
     qwikVite({
       csr: true,
@@ -242,7 +242,7 @@ This plugin supports two build modes when transforming a `go:` import:
 Configuration options added to support this behavior:
 
 - `goBin` (string, optional): explicit directory where `go install` will write binaries (defaults to `join(goBuildDir, 'bin')`).
-- `goInstallArgs` (string[], optional): extra arguments to pass to `go install` for remote installs.
+- `goArgs` (string[], optional): extra arguments to pass to both `go build` and `go install`.
 - `copyDts` (boolean, default: true): whether to copy `*.go.d.ts` declaration files from the local package or module cache into the output directory.
 
 Notes and examples

@@ -6,7 +6,7 @@ export interface Config {
   goBuildDir?: string
   goBuildExtraArgs?: string[]
   goBin?: string
-  goInstallArgs?: string[]
+  goArgs?: string[]
   copyDts?: boolean
 
   buildGoFile?: GoBuilder
