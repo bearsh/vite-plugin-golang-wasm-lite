@@ -14,9 +14,6 @@ if(typeof __go_wasm__ == "undefined") {
   g.__go_wasm__ = {}
 }
 
-// Untested yet, don't know whether uninterrupted 16ms timer is actually sane in non-browser env
-const raf = typeof requestAnimationFrame == 'undefined' ? (cb: () => void) => setTimeout(cb, 1000 / 60) : requestAnimationFrame
-
 // @ts-expect-error
 const bridge = __go_wasm__ as any
 
@@ -46,13 +43,8 @@ export default async function (bytes: BufferSource | Promise<BufferSource>) {
     }
   }, 3 * 1000)
 
-  while(bridge.__ready__ !== true) {
-    await new Promise<void>((res) => {
-      raf(() => res())
-      setTimeout(() => {
-        res()
-      }, 50)
-    })
+  while (bridge.__ready__ !== true) {
+    await new Promise<void>(res => setTimeout(res, 16))
   }
 
   return new Proxy({}, {
