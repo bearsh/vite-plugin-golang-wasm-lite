@@ -5,6 +5,9 @@ export interface Config {
   goBinaryPath?: string
   goBuildDir?: string
   goBuildExtraArgs?: string[]
+  goBin?: string
+  goInstallArgs?: string[]
+  copyDts?: boolean
 
   buildGoFile?: GoBuilder
 

@@ -229,6 +229,40 @@ export default defineConfig({
 })
 ```
 
+#### Local vs Remote builds
+
+This plugin supports two build modes when transforming a Go import:
+
+- Local module: if the imported `.go` file lives inside a directory with a `go.mod` (or in a subdirectory), the plugin will run `go build` from the module root for the package containing the file. The produced `.wasm` will be written into `goBuildDir` and any `*.go.d.ts` files next to the Go file are copied alongside the `.wasm` output.
+
+- Remote module: if no `go.mod` can be found for the imported file, the plugin will try to treat the import as a module path and run `go install <module>@<version>` (uses `@latest` when no version is specified). The plugin sets `GOBIN` to a configurable location so the produced artifact lands in a known folder.
+
+Configuration options added to support this behavior:
+
+- `goBin` (string, optional): explicit directory where `go install` will write binaries (defaults to `join(goBuildDir, 'bin')`).
+- `goInstallArgs` (string[], optional): extra arguments to pass to `go install` for remote installs.
+- `copyDts` (boolean, default: true): whether to copy `*.go.d.ts` declaration files from the local package or module cache into the output directory.
+
+Notes and examples
+
+- Ensure a Go toolchain is available in `PATH` or configure `goBinaryPath`.
+- Example: build a local package (the plugin does this automatically when `go.mod` exists):
+
+```bash
+# run from project root
+GOOS=js GOARCH=wasm go build -o dist/mypkg.wasm ./path/to/package
+```
+
+- Example: install a remote module to produce the artifact (plugin does `module@version` automatically):
+
+```bash
+# plugin will run something like:
+go env GOMODCACHE
+GOBIN=./.gobuild/bin GOOS=js GOARCH=wasm go install example.com/remote/module@v1.2.3
+```
+
+The plugin attempts best-effort mapping between import -> module cache to copy any `*.go.d.ts` files that live inside the module. If your import mapping is non-standard, provide a custom `buildGoFile` in the plugin config to control the build process.
+
 #### transform
 
 `transform` allows you to modify the transformation process of this plugin. This option expecting signature:
