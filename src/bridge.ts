@@ -1,6 +1,6 @@
-const g = 
-  typeof globalThis !== "undefined" ? globalThis : 
-  typeof global !== "undefined" ? global : 
+const g =
+  typeof globalThis !== "undefined" ? globalThis :
+  typeof global !== "undefined" ? global :
   typeof window !== "undefined" ? window :
   self
 
