@@ -1,4 +1,7 @@
+// either import from a source directory
 import goMath from 'go:./math'
+// or from a remote module (with optional version)
+//import goMath from 'go:github.com/bearsh/vite-plugin-golang-wasm-lite/packages/example-app/src/math@175c22cbdbb665a0b0139360b09f295b6d8c9580'
 
 import './demo.css';
 

@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ESNext", "DOM"],
+    "types": ["vite/client"],
+    "strict": false,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src",
+    ".vite-plugin-golang-wasm-lite/types/**/*.d.ts"
+  ]
+}
