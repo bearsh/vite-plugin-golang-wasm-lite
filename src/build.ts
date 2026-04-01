@@ -20,14 +20,6 @@ const findModuleRoot = (startPath: string): string | null => {
   return null
 }
 
-const listWasmFiles = (dir: string) => {
-  try {
-    return readdirSync(dir).filter(f => f.endsWith('.wasm'))
-  } catch (_) {
-    return []
-  }
-}
-
 const listBuildArtifacts = (dir: string) => {
   try {
     return readdirSync(dir).filter(f => {
