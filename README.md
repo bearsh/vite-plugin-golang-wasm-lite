@@ -1,8 +1,8 @@
-# vite-plugin-golang-wasm
+# vite-plugin-golang-wasm-lite
 
 ## What's this?
 
-An opinionated `vite` plugin to load and run Go code as WASM, based on [Golang-WASM](https://github.com/teamortix/golang-wasm)'s implementation.
+An opinionated `vite` plugin to load and run Go code as WASM, based on [`vite-plugin-golang-wasm`](https://github.com/slainless/vite-plugin-golang-wasm).
 
 Compatible for:
 
@@ -14,35 +14,22 @@ Compatible for:
 
 ## Motivation
 
-While I was looking up for a library to load Go code in my private project, I came across `Golang-WASM` project, which is exactly what I'm looking for (shoutout to [teamortix](https://github.com/teamortix) for their great work!). Unfortunately, they have only implemented a loader for `webpack` environment, and I couldn't find any alternative implementations for `vite` or `rollup` environment. Hence, why I created this plugin.
-
-## Bridge implementation difference
-
-Aside from difference of tooling usage, this package also differs in it's bridge implementation (albeit, preserving majority of the implementation):
-
-- Proper global context handling. Original implementation will almost guaranteed to throw when `global` is not defined.
-- Proxied only function calls.
-- Moved readiness check from function call into initiation.
+While I was looking up for a library to load Go code in my private project, I came across `vite-plugin-golang-wasm` project, which was almost what I was looking for (thanks to [slainless](https://github.com/slainless) for their great work!). Unfortunately, it slightly depends on[`Golang-WASM`](https://github.com/teamortix/golang-wasm) and also did not fully work for me.
+So I forked `vite-plugin-golang-wasm` to meat my requirements and made loading local and remote go code work. Therefore I heavily relied on AI.
 
 ## Usage
-
-For detailed information regarding the architecture of the bridge and bindings, please refer to [Golang-WASM#JS Interop](https://github.com/teamortix/golang-wasm#js-interop) and [Golang-WASM#How it works](https://github.com/teamortix/golang-wasm#how-it-works).
 
 For plugin usage, simply import and register it to `vite` config just like most plugins:
 
 ```ts
 // ./vite.config.ts
 import { defineConfig } from 'vite'
-import { qwikVite } from '@builder.io/qwik/optimizer'
 import goWasm from 'vite-plugin-golang-wasm-lite'
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     goWasm(),
-    qwikVite({
-      csr: true,
-    }),
   ],
 })
 ```
@@ -52,60 +39,72 @@ export default defineConfig({
 Create a Go code, for example, a math code:
 
 ```go
-//./src/math/math.go
+// ./src/math/main.go
 package main
 
 import (
-	"errors"
-
-	"github.com/teamortix/golang-wasm/wasm"
+	"fmt"
+	"syscall/js"
 )
 
-func add(x int, y int) (int, error) {
-	return x + y, nil
+const (
+	goWasmName = "__go_wasm__"
+	readyHint  = "__ready__"
+)
+
+var (
+	Global = js.Global()
+	GoWasm = Global.Get(goWasmName)
+)
+
+func ready() {
+	expose(readyHint, true)
 }
+
+func expose(name string, value any) {
+	GoWasm.Set(name, value)
+}
+
 
 func main() {
-	wasm.Expose("add", add)
-	wasm.Ready()
-	<-make(chan struct{}, 0)
-}
+	fmt.Println("example math module")
 
+	GoWasm.Set("add", js.FuncOf(func(this js.Value, args []js.Value) any {
+		a := args[0].Int()
+		b := args[1].Int()
+		return a + b
+	}))
+
+	ready()
+	select {}
+}
 ```
 
 Then, import the Go package from anywhere in source code using the `go:` prefix:
 
 ```ts
-// ./src/app.tsx
-import { component$, useSignal } from '@builder.io/qwik'
-// ...
-import math from 'go:./math'
+// ./src/main.ts
+import goMath from 'go:./math'
 
-export const App = component$(() => {
-  const count = useSignal(0)
-
-  return (
-    <>
-      // ...
-      <h1>Vite + Qwik</h1>
-      <div class="card">
-        <button
-          onClick$={async () => {
-            count.value = await math.add(count.value, 10)
-          }}
-        >
-          count is {count.value}
-        </button>
+const el = document.getElementById('app');
+if (el) {
+  el.innerHTML = `
+    <div>
+      <h1>Vite + Go WASM Demo</h1>
+      <p>The Go function <code>add(1, 2)</code> was successfully imported and executed:</p>
+      <div>
+        <span>Result:</span>
+        <span>${goMath.add(1, 2)}</span>
       </div>
-      // ...
-    </>
-  )
-})
+      <p>powered by <b>vite-plugin-golang-wasm-lite</b></p>
+    </div>
+  `;
+}
 ```
 
 #### Typescript Support
 
-It's actually possible to generate typescript definition from Go source code since the official Go repository already offered [set of tools](https://pkg.go.dev/go) to work with Go source code such as parser, scanner, AST types, etc. However, I don't think I have the time to actually implement that, given the size and scope of the feature.
+It's actually possible to generate typescript definition from Go source code since the official Go repository already offered [set of tools](https://pkg.go.dev/go) to work with Go source code such as parser, scanner, AST types, etc. However, this is out of scope for this project.
 
 Instead, each module needs to be defined via a Typescript declaration. With the `go:` import prefix, the simplest approach is an ambient module declaration. Reusing the math example from above:
 
@@ -176,7 +175,20 @@ export default defineConfig({
 
 ## Configuration
 
-https://github.com/slainless/vite-plugin-golang-wasm/blob/8afe0a48ac9dc1bb4b4b043576231c86ceacc1fa/src/interface.ts#L3-L11
+```ts
+export interface Config {
+  wasmExecPath?: string
+  goBinaryPath?: string
+  goBuildDir?: string
+  goDtsDir?: string
+  goBuildExtraArgs?: string[]
+  goBin?: string
+  goArgs?: string[]
+  copyDts?: boolean
+  buildGoFile?: GoBuilder
+  transform?: (command: "build" | "serve", emit: () => Promise<string>, read: () => Promise<Buffer>) => Promise<string | undefined>
+}
+```
 
 #### goBinaryPath, wasmExecPath
 
@@ -188,9 +200,6 @@ export default defineConfig({
     goWasm({
       goBinaryPath: '/path/to/go/bin/go',
       wasmExecPath: '/path/to/go/misc/wasm/wasm_exec.js',
-    }),
-    qwikVite({
-      csr: true,
     }),
   ],
 })
@@ -235,9 +244,6 @@ export default defineConfig({
   plugins: [
     goWasm({
       goArgs: ["-tags", "mytag", "-ldflags", "-s -w"]
-    }),
-    qwikVite({
-      csr: true,
     }),
   ],
 })
@@ -317,16 +323,10 @@ Aside from transforming how the code loading, you can also use `transform` to pr
 - `exit-hook` for catch-all solution to cleanup code, used to remove temporary directory:
   https://github.com/slainless/vite-plugin-golang-wasm/blob/8afe0a48ac9dc1bb4b4b043576231c86ceacc1fa/src/temp_dir.ts#L26-L28
 
-## To-Do
-
-- [ ] Implement AST analysis for go code dependency for use in Vite HMR
-- [ ] Implement `handleHotUpdate` to allow seamless HMR instead of page reload
-- [ ] Add unit test
-
 ## License
 
 **MIT**
 
 ---
 
-Created by [slainless](https://github.com/slainless)
+Originally created by [slainless](https://github.com/slainless), modified by [bearsh](https://github.com/bearsh)
