@@ -208,7 +208,17 @@ For example, you can use `tinygo` compiler instead, by pointing `goBinaryPath` t
 
 `goBuildDir` will be resolved to `os.tmpdir/go-wasm-${RANDOM_STRING}`. This option defines the directory where build output and cache should be placed. By default, it will create a temporary directory that persists throughout the lifecycle of the `vite` process and is cleaned up when the process exits (for example `SIGINT`, normal exit, error).
 
-`goDtsDir` defines where copied `*.d.ts` declaration files are written. By default, it is `.vite-plugin-golang-wasm-lite/types` (resolved from Vite root). This keeps declaration files in a stable, IDE-friendly location even when `goBuildDir` is temporary or changes between runs.
+`goDtsDir` defines where copied `*.d.ts` declaration files are written. By default, it is `node_modules/@types/vite-plugin-golang-wasm-lite` (resolved from Vite root). This allows TypeScript to discover generated declarations without adding extra `tsconfig.json` include entries, while still remaining independent from `goBuildDir`.
+
+If your `tsconfig.json` uses `compilerOptions.types`, TypeScript only loads the listed type packages. In that case, add `vite-plugin-golang-wasm-lite` to the list, for example:
+
+```json
+{
+  "compilerOptions": {
+    "types": ["vite/client", "vite-plugin-golang-wasm-lite"]
+  }
+}
+```
 
 `buildGoFile` is called when the code needs to be built. Default implementation:
 

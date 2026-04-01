@@ -98,7 +98,7 @@ export default (config?: Config) => {
         finalConfig.goBuildDir = await createTempDir(cfg)
       }
       if (finalConfig.goDtsDir == null) {
-        finalConfig.goDtsDir = '.vite-plugin-golang-wasm-lite/types'
+        finalConfig.goDtsDir = 'node_modules/@types/vite-plugin-golang-wasm-lite'
       }
     },
     async load(this: any, id): Promise<string | Pick<SourceDescription, "code" | "moduleSideEffects"> | undefined> {

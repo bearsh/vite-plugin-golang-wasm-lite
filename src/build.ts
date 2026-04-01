@@ -187,6 +187,29 @@ const copyDtsFile = (srcPath: string, destDir: string, rewriteModuleSpecifier?: 
   }
 }
 
+const ensureTypesPackageEntry = (dtsDir: string) => {
+  const normalized = dtsDir.replace(/\\/g, '/')
+  if (!normalized.includes('/node_modules/@types/')) {
+    return
+  }
+
+  let files: string[]
+  try {
+    files = readdirSync(dtsDir)
+      .filter((f) => f.endsWith('.d.ts') && f !== 'index.d.ts')
+      .sort()
+  } catch (_) {
+    return
+  }
+
+  if (files.length === 0) {
+    return
+  }
+
+  const refs = files.map((f) => `/// <reference path="./${f}" />`).join('\n')
+  writeFileSync(join(dtsDir, 'index.d.ts'), `${refs}\nexport {}\n`, 'utf8')
+}
+
 export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> => {
   const cleanId = stripQuery(id)
   if (!config.goBinaryPath) {
@@ -295,6 +318,7 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
             for (const f of files) {
               copyDtsFile(join(packageDir, f), goDtsDir)
             }
+            ensureTypesPackageEntry(goDtsDir)
           } catch (_) {}
         }
         resolve(outputPath)
@@ -361,6 +385,7 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
                 } catch (_) {}
               }
               for (const srcPath of dts) copyDtsFile(srcPath, goDtsDir, `go:${requestedRemoteSpecifier}`)
+              ensureTypesPackageEntry(goDtsDir)
             } else {
               try {
                 viteConfig.logger.warn(`[go-build] module cache path not found for ${moduleRef}`)
@@ -388,6 +413,7 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
                 } catch (_) {}
               }
               for (const srcPath of dts) copyDtsFile(srcPath, goDtsDir, `go:${requestedRemoteSpecifier}`)
+              ensureTypesPackageEntry(goDtsDir)
             } else {
               try {
                 viteConfig.logger.warn(`[go-build] module cache path not found for ${moduleRef}`)
