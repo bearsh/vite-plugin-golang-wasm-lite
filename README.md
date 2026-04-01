@@ -34,7 +34,7 @@ For plugin usage, simply import and register it to `vite` config just like most 
 // ./vite.config.ts
 import { defineConfig } from 'vite'
 import { qwikVite } from '@builder.io/qwik/optimizer'
-import goWasm from 'vite-plugin-golang-wasm'
+import goWasm from 'vite-plugin-golang-wasm-lite'
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -154,7 +154,7 @@ You can change the output of the Go-loading JS code using plugin's option: `tran
 
 ```ts
 ...
-import { WASM_EXEC_ID, WASM_BRIDGE_ID } from 'vite-plugin-golang-wasm'
+import { WASM_EXEC_ID, WASM_BRIDGE_ID } from 'vite-plugin-golang-wasm-lite'
 
 export default defineConfig({
   plugins: [
