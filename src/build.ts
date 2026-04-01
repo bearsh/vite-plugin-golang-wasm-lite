@@ -1,11 +1,13 @@
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { basename, join, relative, dirname, parse, isAbsolute } from 'node:path'
-import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { GoBuilder } from './interface.js'
 
 const GO_LOCAL_ID_PREFIX = '\0go:local:'
 const GO_REMOTE_ID_PREFIX = '\0go:remote:'
 const stripQuery = (id: string) => id.split('?')[0].split('#')[0]
+
+const isDeclarationFile = (name: string) => name.endsWith('.d.ts')
 
 const findModuleRoot = (startPath: string): string | null => {
   let dir = startPath
@@ -29,7 +31,7 @@ const listWasmFiles = (dir: string) => {
 const listBuildArtifacts = (dir: string) => {
   try {
     return readdirSync(dir).filter(f => {
-      if (f.endsWith('.go.d.ts') || f.endsWith('.go.ts.d')) return false
+      if (f.endsWith('.d.ts')) return false
       if (f.startsWith('.')) return false
       try {
         return statSync(join(dir, f)).isFile()
@@ -54,37 +56,134 @@ const queryGoEnv = (goBinExe: string): Record<GoEnvKey, string> => {
   }
 }
 
-const getModuleCachePath = (modCache: string, modulePath: string, version: string): string | null => {
-  const parts = modulePath.split('/')
-  const last = parts.pop() as string
-  const baseDir = join(modCache, ...parts)
-  if (!existsSync(baseDir)) return null
+const escapeGoModCacheSegment = (segment: string) => segment.replace(/[A-Z]/g, (c) => `!${c.toLowerCase()}`)
 
-  if (version && version !== 'latest') {
-    const candidate = join(baseDir, `${last}@${version}`)
-    if (existsSync(candidate)) return candidate
-    return null
+const getModulePathCandidates = (modulePath: string): string[] => {
+  const parts = modulePath.split('/').filter(Boolean)
+  const candidates: string[] = []
+  for (let i = parts.length; i >= 1; i--) {
+    candidates.push(parts.slice(0, i).join('/'))
   }
+  return candidates
+}
 
-  // version == 'latest' or unspecified: find the most recently modified matching dir
-  try {
-    const entries = readdirSync(baseDir)
-    let best: string | null = null
-    let bestMtime = 0
-    for (const e of entries) {
-      if (!e.startsWith(last + '@')) continue
-      const p = join(baseDir, e)
-      let st
-      try { st = statSync(p) } catch { continue }
-      const mtime = st.mtimeMs
-      if (mtime > bestMtime) {
-        bestMtime = mtime
-        best = p
+const getModuleCachePath = (modCache: string, modulePath: string, version: string): string | null => {
+  const escapedVersion = escapeGoModCacheSegment(version)
+
+  for (const candidatePath of getModulePathCandidates(modulePath)) {
+    const escapedPath = candidatePath.split('/').map(escapeGoModCacheSegment).join('/')
+    const parts = escapedPath.split('/')
+    const last = parts.pop() as string
+    const baseDir = join(modCache, ...parts)
+    if (!existsSync(baseDir)) continue
+
+    if (version && version !== 'latest') {
+      const candidate = join(baseDir, `${last}@${escapedVersion}`)
+      if (existsSync(candidate)) return candidate
+
+      // For commit hashes and other non-semver refs, Go often stores a pseudo-version
+      // (for example: v0.0.0-<timestamp>-<commit>) in module cache.
+      try {
+        const entries = readdirSync(baseDir)
+        const matching = entries.filter((e) => {
+          if (!e.startsWith(last + '@')) return false
+          return e.endsWith(`-${escapedVersion}`) || e.includes(escapedVersion)
+        })
+
+        let best: string | null = null
+        let bestMtime = 0
+        for (const e of matching) {
+          const p = join(baseDir, e)
+          let st
+          try { st = statSync(p) } catch { continue }
+          const mtime = st.mtimeMs
+          if (mtime > bestMtime) {
+            bestMtime = mtime
+            best = p
+          }
+        }
+        if (best) return best
+      } catch (_) {
+        // continue with next candidate path
       }
     }
-    return best
-  } catch (_){
-    return null
+
+    // version == 'latest' or unspecified: find the most recently modified matching dir
+    try {
+      const entries = readdirSync(baseDir)
+      let best: string | null = null
+      let bestMtime = 0
+      for (const e of entries) {
+        if (!e.startsWith(last + '@')) continue
+        const p = join(baseDir, e)
+        let st
+        try { st = statSync(p) } catch { continue }
+        const mtime = st.mtimeMs
+        if (mtime > bestMtime) {
+          bestMtime = mtime
+          best = p
+        }
+      }
+      if (best) return best
+    } catch (_) {
+      // continue with the next shorter candidate path
+    }
+  }
+
+  return null
+}
+
+const collectDeclarationFiles = (dir: string, depth = 0, maxDepth = 4): string[] => {
+  if (depth > maxDepth) return []
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch (_) {
+    return []
+  }
+
+  const out: string[] = []
+  for (const entry of entries) {
+    const full = join(dir, entry)
+    let st
+    try {
+      st = statSync(full)
+    } catch (_) {
+      continue
+    }
+
+    if (st.isDirectory()) {
+      out.push(...collectDeclarationFiles(full, depth + 1, maxDepth))
+      continue
+    }
+
+    if (st.isFile() && isDeclarationFile(entry)) {
+      out.push(full)
+    }
+  }
+
+  return out
+}
+
+const copyDtsFile = (srcPath: string, destDir: string, rewriteModuleSpecifier?: string) => {
+  const name = basename(srcPath)
+  const targetPath = join(destDir, name)
+
+  if (!rewriteModuleSpecifier) {
+    copyFileSync(srcPath, targetPath)
+    return
+  }
+
+  try {
+    const content = readFileSync(srcPath, 'utf8')
+    const rewritten = content.replace(
+      /(declare\s+module\s+['\"])go:[^'\"]+(['\"]\s*\{)/,
+      `$1${rewriteModuleSpecifier}$2`
+    )
+    writeFileSync(targetPath, rewritten, 'utf8')
+  } catch (_) {
+    // Fall back to plain copy if rewriting fails for any reason.
+    copyFileSync(srcPath, targetPath)
   }
 }
 
@@ -125,6 +224,11 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
   if (goBuildDir && !isAbsolute(goBuildDir)) {
     goBuildDir = join(projectRoot, goBuildDir)
   }
+
+  let goDtsDir = (config.goDtsDir || goBuildDir) as string
+  if (goDtsDir && !isAbsolute(goDtsDir)) {
+    goDtsDir = join(projectRoot, goDtsDir)
+  }
   const goBinDir =
     (config.goBin &&
       (isAbsolute(config.goBin as string)
@@ -133,6 +237,9 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     join(goBuildDir as string, 'bin')
   mkdirSync(goBuildDir, { recursive: true })
   mkdirSync(goBinDir, { recursive: true })
+  if (config.copyDts !== false) {
+    mkdirSync(goDtsDir, { recursive: true })
+  }
 
   const envBase: any = {
     ...process.env,
@@ -181,12 +288,12 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     return new Promise((resolve, reject) => {
       child.once('exit', (code) => {
         if (code !== 0) return reject(new Error(`builder exit with code: ${code}`))
-        // copy .go.d.ts files if requested
+        // copy .d.ts files if requested
         if (config.copyDts !== false) {
           try {
-            const files = readdirSync(packageDir).filter(f => f.endsWith('.go.d.ts') || f.endsWith('.go.ts.d'))
+            const files = readdirSync(packageDir).filter(f => f.endsWith('.d.ts'))
             for (const f of files) {
-              copyFileSync(join(packageDir, f), join(dirname(outputPath), f))
+              copyDtsFile(join(packageDir, f), goDtsDir)
             }
           } catch (_) {}
         }
@@ -198,7 +305,8 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
 
   // remote module flow
   // id could be 'module/path@version' or 'module/path' or a local path — attempt to map
-  let moduleRef = cleanId.slice(GO_REMOTE_ID_PREFIX.length)
+  const requestedRemoteSpecifier = cleanId.slice(GO_REMOTE_ID_PREFIX.length)
+  let moduleRef = requestedRemoteSpecifier
   // ensure version
   if (!moduleRef.includes('@')) moduleRef = moduleRef + '@latest'
   const modulePathOnly = moduleRef.split('@')[0]
@@ -246,8 +354,17 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
             const version = ver || 'latest'
             const cachePath = getModuleCachePath(modCache, modPath, version)
             if (cachePath && existsSync(cachePath)) {
-              const dts = readdirSync(cachePath).filter(f => f.endsWith('.go.d.ts'))
-              for (const f of dts) copyFileSync(join(cachePath, f), join(remoteWasmDir, f))
+              const dts = collectDeclarationFiles(cachePath, 0, 2)
+              if (dts.length === 0) {
+                try {
+                  viteConfig.logger.warn(`[go-build] no .d.ts found in module cache: ${cachePath}`)
+                } catch (_) {}
+              }
+              for (const srcPath of dts) copyDtsFile(srcPath, goDtsDir, `go:${requestedRemoteSpecifier}`)
+            } else {
+              try {
+                viteConfig.logger.warn(`[go-build] module cache path not found for ${moduleRef}`)
+              } catch (_) {}
             }
           } catch (_) {}
         }
@@ -264,8 +381,17 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
             const version = ver || 'latest'
             const cachePath = getModuleCachePath(modCache, modPath, version)
             if (cachePath && existsSync(cachePath)) {
-              const dts = readdirSync(cachePath).filter(f => f.endsWith('.go.d.ts'))
-              for (const f of dts) copyFileSync(join(cachePath, f), join(remoteWasmDir, f))
+              const dts = collectDeclarationFiles(cachePath, 0, 2)
+              if (dts.length === 0) {
+                try {
+                  viteConfig.logger.warn(`[go-build] no .d.ts found in module cache: ${cachePath}`)
+                } catch (_) {}
+              }
+              for (const srcPath of dts) copyDtsFile(srcPath, goDtsDir, `go:${requestedRemoteSpecifier}`)
+            } else {
+              try {
+                viteConfig.logger.warn(`[go-build] module cache path not found for ${moduleRef}`)
+              } catch (_) {}
             }
           } catch (_) {}
         }

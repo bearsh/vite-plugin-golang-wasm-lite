@@ -4,6 +4,7 @@ export interface Config {
   wasmExecPath?: string
   goBinaryPath?: string
   goBuildDir?: string
+  goDtsDir?: string
   goBuildExtraArgs?: string[]
   goBin?: string
   goArgs?: string[]

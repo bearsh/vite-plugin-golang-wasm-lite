@@ -204,9 +204,11 @@ Must be noted, however, that it's not recommended to point `goBinaryPath` to oth
 
 For example, you can use `tinygo` compiler instead, by pointing `goBinaryPath` to `tinygo` path. Other extra arguments such as `--target` can be added via `goArgs`.
 
-#### goBuildDir, buildGoFile
+#### goBuildDir, goDtsDir, buildGoFile
 
-`goBuildDir` will be resolved to `os.tmpdir/go-wasm-${RANDOM_STRING}`. This option defines the directory where the output and cache of the build should be placed. By default, it will create a temporary directory that persist throughout the lifecycle of `vite` process and will be cleaned up when process exits (either by `SIGINT`, normal exit, error, etc.). However, when this option is provided, it's assumed that end user will be responsible for managing the directory, from it's creation to it's cleanup.
+`goBuildDir` will be resolved to `os.tmpdir/go-wasm-${RANDOM_STRING}`. This option defines the directory where build output and cache should be placed. By default, it will create a temporary directory that persists throughout the lifecycle of the `vite` process and is cleaned up when the process exits (for example `SIGINT`, normal exit, error).
+
+`goDtsDir` defines where copied `*.d.ts` declaration files are written. By default, it is `.vite-plugin-golang-wasm-lite/types` (resolved from Vite root). This keeps declaration files in a stable, IDE-friendly location even when `goBuildDir` is temporary or changes between runs.
 
 `buildGoFile` is called when the code needs to be built. Default implementation:
 
@@ -235,7 +237,7 @@ export default defineConfig({
 
 This plugin supports two build modes when transforming a `go:` import:
 
-- Local module: `import math from 'go:./math'` means "build the Go package in `./math`". The plugin finds the nearest `go.mod`, runs `go build` for that package, writes the resulting `.wasm` into `goBuildDir`, and copies package-local `*.go.d.ts` or `*.go.ts.d` files alongside the output when present.
+- Local module: `import math from 'go:./math'` means "build the Go package in `./math`". The plugin finds the nearest `go.mod`, runs `go build` for that package, writes the resulting `.wasm` into `goBuildDir`, and copies package-local `*.d.ts` files alongside the output when present.
 
 - Remote module: `import tool from 'go:github.com/owner/repo/cmd/tool@v1.2.3'` makes the plugin run `go install <module>@<version>`. If no version is specified, it uses `@latest`. The plugin sets `GOBIN` to a configurable location so the produced artifact lands in a known folder.
 
@@ -243,7 +245,7 @@ Configuration options added to support this behavior:
 
 - `goBin` (string, optional): explicit directory where `go install` will write binaries (defaults to `join(goBuildDir, 'bin')`).
 - `goArgs` (string[], optional): extra arguments to pass to both `go build` and `go install`.
-- `copyDts` (boolean, default: true): whether to copy `*.go.d.ts` declaration files from the local package or module cache into the output directory.
+- `copyDts` (boolean, default: true): whether to copy `*.d.ts` declaration files from the local package or module cache into `goDtsDir`.
 
 Notes and examples
 
@@ -263,7 +265,7 @@ go env GOMODCACHE
 GOBIN=./.gobuild/bin GOOS=js GOARCH=wasm go install example.com/remote/module@v1.2.3
 ```
 
-The plugin attempts best-effort mapping between import -> module cache to copy any `*.go.d.ts` files that live inside the module. If your import mapping is non-standard, provide a custom `buildGoFile` in the plugin config to control the build process.
+The plugin attempts best-effort mapping between import -> module cache to copy any `*.d.ts` files that live inside the module. If your import mapping is non-standard, provide a custom `buildGoFile` in the plugin config to control the build process.
 
 #### transform
 
