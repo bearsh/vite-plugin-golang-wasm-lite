@@ -1,42 +1,53 @@
 # vite-plugin-golang-wasm-lite
 
-## What's this?
+[![npm version](https://img.shields.io/npm/v/vite-plugin-golang-wasm-lite.svg)](https://www.npmjs.com/package/vite-plugin-golang-wasm-lite)
 
-An opinionated `vite` plugin to load and run Go code as WASM, based on [`vite-plugin-golang-wasm`](https://github.com/slainless/vite-plugin-golang-wasm).
+An opinionated Vite plugin for importing Go packages as WebAssembly modules with the `go:` prefix.
 
-Compatible for:
+It started as a fork of [`vite-plugin-golang-wasm`](https://github.com/slainless/vite-plugin-golang-wasm), with a stronger focus on straightforward local-package usage and support for remote module installs.
 
-- [ESM-only environment](https://gist.github.com/sindresorhus/a39789f98801d908bbc7ff3ecc99d99c)
-- `vite: ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0`,
-- `rollup: ^3.0.0 || ^4.0.0`,
-- Go with `GO111MODULE=on`,
-- and Node LTS (equivalent to `node18` or higher, based on [`@tsconfig/node-lts/tsconfig.json`](https://github.com/tsconfig/bases/blob/main/bases/node-lts.json)).
+## Compatibility
 
-## Motivation
+- ESM-only environments
+- `vite: ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0`
+- `rollup: ^3.0.0 || ^4.0.0`
+- Node LTS, effectively Node 18+
+- Go modules enabled
 
-While I was looking up for a library to load Go code in my private project, I came across `vite-plugin-golang-wasm` project, which was almost what I was looking for (thanks to [slainless](https://github.com/slainless) for their great work!). Unfortunately, it slightly depends on[`Golang-WASM`](https://github.com/teamortix/golang-wasm) and also did not fully work for me.
-So I forked `vite-plugin-golang-wasm` to meat my requirements and made loading local and remote go code work. Therefore I heavily relied on AI.
+## Install
 
-## Usage
+```bash
+pnpm add -D vite-plugin-golang-wasm-lite
+```
 
-For plugin usage, simply import and register it to `vite` config just like most plugins:
+Equivalent commands for other package managers:
+
+```bash
+npm install -D vite-plugin-golang-wasm-lite
+yarn add -D vite-plugin-golang-wasm-lite
+```
+
+## Prerequisites
+
+- A working Go toolchain must be available, either in `PATH` or via `goBinaryPath`.
+- The plugin must be able to resolve `wasm_exec.js`, either automatically or via `wasmExecPath`.
+- Imported Go packages must compile as `package main` for WebAssembly.
+- TypeScript users should provide `*.d.ts` declarations for `go:` imports.
+
+## Quickstart
+
+Register the plugin in your Vite config:
 
 ```ts
-// ./vite.config.ts
 import { defineConfig } from 'vite'
 import goWasm from 'vite-plugin-golang-wasm-lite'
 
-// https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [
-    goWasm(),
-  ],
+  plugins: [goWasm()],
 })
 ```
 
-> ⚠️ ATTENTION: Entrypoint's package must be `main` or it will fail to load. See [go/wiki/WebAssembly](https://github.com/golang/go/wiki/WebAssembly#:~:text=Note%20that%20you%20can%20only%20compile%20main%20packages.%20Otherwise%2C%20you%20will%20get%20an%20object%20file%20that%20cannot%20be%20run%20in%20WebAssembly.%20If%20you%20have%20a%20package%20that%20you%20want%20to%20be%20able%20to%20use%20with%20WebAssembly%2C%20convert%20it%20to%20a%20main%20package%20and%20build%20a%20binary.), https://github.com/golang/go/issues/35657#issuecomment-554904779.
-
-Create a Go code, for example, a math code:
+Create a Go package that exposes values on `globalThis.__go_wasm__`:
 
 ```go
 // ./src/math/main.go
@@ -52,24 +63,16 @@ const (
 	readyHint  = "__ready__"
 )
 
-var (
-	Global = js.Global()
-	GoWasm = Global.Get(goWasmName)
-)
+var goWasm = js.Global().Get(goWasmName)
 
 func ready() {
-	expose(readyHint, true)
+	goWasm.Set(readyHint, true)
 }
-
-func expose(name string, value any) {
-	GoWasm.Set(name, value)
-}
-
 
 func main() {
 	fmt.Println("example math module")
 
-	GoWasm.Set("add", js.FuncOf(func(this js.Value, args []js.Value) any {
+	goWasm.Set("add", js.FuncOf(func(this js.Value, args []js.Value) any {
 		a := args[0].Int()
 		b := args[1].Int()
 		return a + b
@@ -80,98 +83,73 @@ func main() {
 }
 ```
 
-Then, import the Go package from anywhere in source code using the `go:` prefix:
+Import it from your app with the `go:` prefix:
 
 ```ts
-// ./src/main.ts
 import goMath from 'go:./math'
 
-const el = document.getElementById('app');
+const el = document.getElementById('app')
+
 if (el) {
   el.innerHTML = `
     <div>
       <h1>Vite + Go WASM Demo</h1>
-      <p>The Go function <code>add(1, 2)</code> was successfully imported and executed:</p>
-      <div>
-        <span>Result:</span>
-        <span>${goMath.add(1, 2)}</span>
-      </div>
-      <p>powered by <b>vite-plugin-golang-wasm-lite</b></p>
+      <p>The Go function <code>add(1, 2)</code> was imported and executed.</p>
+      <p>Result: <strong>${goMath.add(1, 2)}</strong></p>
     </div>
-  `;
+  `
 }
 ```
 
-#### Typescript Support
-
-It's actually possible to generate typescript definition from Go source code since the official Go repository already offered [set of tools](https://pkg.go.dev/go) to work with Go source code such as parser, scanner, AST types, etc. However, this is out of scope for this project.
-
-Instead, each module needs to be defined via a Typescript declaration. With the `go:` import prefix, the simplest approach is an ambient module declaration. Reusing the math example from above:
+Add a matching TypeScript declaration:
 
 ```ts
 // ./src/math/go-modules.d.ts
 declare module 'go:./math' {
-  const __default: {
-    add: (x: number, y: number) => Promise<number>
+  const mod: {
+    add: (x: number, y: number) => number
   }
 
-  export default __default
+  export default mod
 }
 ```
 
-## How it works
+## Local And Remote Imports
 
-Essentially, this plugin will transform each `go:` import into JS code which only contains code for loading WASM. By default, the code will be bundled (as asset) or inlined (as base64 data) and then loaded via fetch call:
-
-```ts
-import '/@id/__x00__virtual:wasm_exec'
-import goWasm from '/@id/__x00__virtual:wasm_bridge'
-
-const wasm = fetch(`${ data }`).then((r) =>
-  r.arrayBuffer()
-)
-export default goWasm(wasm)
-```
-
-In default setup, the actual code are transformed into WASM and will be emitted as asset (in `build` mode) or inlined (in `serve` mode). The resulting asset or resulting inlined code (in base64 format) can then be imported or loaded via `fetch` call
-
-Loaded as an asset (default setup, `build`):
+Local package import:
 
 ```ts
-const wasm = fetch(import.meta.ROLLUP_FILE_URL_{REFERENCE_ID}).then(r=>r.arrayBuffer());
+import goMath from 'go:./math'
 ```
 
-Loaded as base64 data (default setup, `serve`):
+Remote module import:
 
 ```ts
-const wasm = fetch(`data:application/wasm;base64,{BASE_64_ENCODED_CODE}`).then(
-  (r) => r.arrayBuffer()
-)
+import tool from 'go:github.com/owner/repo/cmd/tool@v1.2.3'
 ```
 
-You can change the output of the Go-loading JS code using plugin's option: `transform`. For example, you can modify the transformation process to always emit the Go code:
+If no version is specified for a remote import, the plugin uses `@latest`.
+
+## How It Works
+
+Each `go:` import is transformed into a JavaScript module that:
+
+- loads `wasm_exec.js`
+- loads the runtime bridge
+- fetches the generated `.wasm`
+- instantiates the module and returns a proxy around `__go_wasm__`
+
+Default build-mode output is equivalent to:
 
 ```ts
-...
-import { WASM_EXEC_ID, WASM_BRIDGE_ID } from 'vite-plugin-golang-wasm-lite'
+import 'virtual:wasm_exec'
+import goWasm from 'virtual:wasm_bridge'
 
-export default defineConfig({
-  plugins: [
-    goWasm({
-      async transform(command, emit, read) {
-        return `
-          import '${WASM_EXEC_ID}';
-          import goWasm from '${WASM_BRIDGE_ID}';
-          
-          const wasm = fetch(import.meta.ROLLUP_FILE_URL_${await emit()}).then(r => r.arrayBuffer());
-          export default await goWasm(wasm);
-        `
-      }
-    }),
-    ...
-  ],
-})
+const wasm = fetch(import.meta.ROLLUP_FILE_URL_<reference>).then((r) => r.arrayBuffer())
+export default await goWasm(wasm)
 ```
+
+In `serve` mode, the WASM is inlined as a base64 `data:` URL by default.
 
 ## Configuration
 
@@ -186,40 +164,44 @@ export interface Config {
   goArgs?: string[]
   copyDts?: boolean
   buildGoFile?: GoBuilder
-  transform?: (command: "build" | "serve", emit: () => Promise<string>, read: () => Promise<Buffer>) => Promise<string | undefined>
+  transform?: (
+    command: 'build' | 'serve',
+    emit: () => Promise<string>,
+    read: () => Promise<Buffer>
+  ) => Promise<string | undefined>
 }
 ```
 
-#### goBinaryPath, wasmExecPath
+### Option Notes
 
-By default, `goBinaryPath` and `wasmExecPath` will be resolved relative to `process.env.GOROOT` if either of these options are not defined. But an error will be thrown when `GOROOT` is also not set. `GOROOT` needs to be added into OS's environment variables or set locally before running any script, for example `GOROOT=/usr/bin/go vite dev`. Alternatively, both these options can be provided to allow direct or custom `go` binary or `wasm_exec.js` resolving.
+`goBinaryPath`, `wasmExecPath`
+
+- `goBinaryPath` defaults to `go`, unless `GOROOT` is set, in which case the plugin also tries `GOROOT/bin/go`.
+- `wasmExecPath` is resolved from the Go installation. If `GOROOT` is not set, the plugin tries `go env GOROOT`.
+- If `wasm_exec.js` still cannot be resolved, set `wasmExecPath` explicitly.
 
 ```ts
 export default defineConfig({
   plugins: [
     goWasm({
       goBinaryPath: '/path/to/go/bin/go',
-      wasmExecPath: '/path/to/go/misc/wasm/wasm_exec.js',
+      wasmExecPath: '/path/to/go/lib/wasm/wasm_exec.js',
     }),
   ],
 })
 ```
 
-Must be noted, however, that it's not recommended to point `goBinaryPath` to other compiler with very distinct CLI usage. Specifically, the compiler must accept or support this CLI execution:
+`goBuildDir`
 
-```ts
-`${binary} build ${optional_extra_args} -o ${output_path} ${input_path}`
-```
+- Directory used for build artifacts and temporary Go build state.
+- By default, the plugin creates and cleans up a temporary directory for the lifetime of the Vite process.
 
-For example, you can use `tinygo` compiler instead, by pointing `goBinaryPath` to `tinygo` path. Other extra arguments such as `--target` can be added via `goArgs`.
+`goDtsDir`
 
-#### goBuildDir, goDtsDir, buildGoFile
+- Output directory for copied `*.d.ts` files.
+- Default: `node_modules/@types/vite-plugin-golang-wasm-lite`, resolved from the Vite project root.
 
-`goBuildDir` will be resolved to `os.tmpdir/go-wasm-${RANDOM_STRING}`. This option defines the directory where build output and cache should be placed. By default, it will create a temporary directory that persists throughout the lifecycle of the `vite` process and is cleaned up when the process exits (for example `SIGINT`, normal exit, error).
-
-`goDtsDir` defines where copied `*.d.ts` declaration files are written. By default, it is `node_modules/@types/vite-plugin-golang-wasm-lite` (resolved from Vite root). This allows TypeScript to discover generated declarations without adding extra `tsconfig.json` include entries, while still remaining independent from `goBuildDir`.
-
-If your `tsconfig.json` uses `compilerOptions.types`, TypeScript only loads the listed type packages. In that case, add `vite-plugin-golang-wasm-lite` to the list, for example:
+If your `tsconfig.json` uses `compilerOptions.types`, add the generated type package explicitly:
 
 ```json
 {
@@ -229,104 +211,116 @@ If your `tsconfig.json` uses `compilerOptions.types`, TypeScript only loads the 
 }
 ```
 
-`buildGoFile` is called when the code needs to be built. Default implementation:
+`goArgs`
 
-https://github.com/slainless/vite-plugin-golang-wasm/blob/f48063ef18a79ec364244c87404cbf50c224ce16/src/build.ts#L5-L42
-
-This option can be used to set custom build directive when more control is needed.
-
-#### goArgs
-
-`goArgs` allows you to add extra arguments and/or flags to both the build and install calls. For example, you can use `-tags` to enable build tags or `-ldflags` to pass linker flags:
+- Extra arguments passed to both `go build` and `go install`.
 
 ```ts
 export default defineConfig({
   plugins: [
     goWasm({
-      goArgs: ["-tags", "mytag", "-ldflags", "-s -w"]
+      goArgs: ['-tags', 'mytag', '-ldflags', '-s -w'],
     }),
   ],
 })
 ```
 
-#### Local vs Remote builds
+`goBin`
 
-This plugin supports two build modes when transforming a `go:` import:
+- Exposed in the public config interface.
+- The current remote-install implementation uses a deterministic Go build directory rooted at `goBuildDir` and does not rely on `GOBIN` during cross-compiled installs.
 
-- Local module: `import math from 'go:./math'` means "build the Go package in `./math`". The plugin finds the nearest `go.mod`, runs `go build` for that package, writes the resulting `.wasm` into `goBuildDir`, and copies package-local `*.d.ts` files alongside the output when present.
+`copyDts`
 
-- Remote module: `import tool from 'go:github.com/owner/repo/cmd/tool@v1.2.3'` makes the plugin run `go install <module>@<version>`. If no version is specified, it uses `@latest`. The plugin sets `GOBIN` to a configurable location so the produced artifact lands in a known folder.
+- Defaults to `true`.
+- For local packages, package-local `*.d.ts` files are copied into `goDtsDir`.
+- For remote modules, the plugin attempts a best-effort lookup in the Go module cache and copies matching `*.d.ts` files when found.
 
-Configuration options added to support this behavior:
+`buildGoFile`
 
-- `goBin` (string, optional): explicit directory where `go install` will write binaries (defaults to `join(goBuildDir, 'bin')`).
-- `goArgs` (string[], optional): extra arguments to pass to both `go build` and `go install`.
-- `copyDts` (boolean, default: true): whether to copy `*.d.ts` declaration files from the local package or module cache into `goDtsDir`.
+- Hook for overriding the default build behavior.
+- The default implementation lives in [src/build.ts](src/build.ts).
 
-Notes and examples
+`transform`
 
-- Ensure a Go toolchain is available in `PATH` or configure `goBinaryPath`.
-- Example: build a local package (the plugin does this automatically when `go.mod` exists):
+- Lets you override the generated JavaScript wrapper.
+- Signature:
+
+```ts
+(command: 'build' | 'serve', emit: () => Promise<string>, read: () => Promise<Buffer>) => Promise<string | undefined>
+```
+
+Example that always emits the WASM as an asset:
+
+```ts
+import { defineConfig } from 'vite'
+import goWasm, { WASM_BRIDGE_ID, WASM_EXEC_ID } from 'vite-plugin-golang-wasm-lite'
+
+export default defineConfig({
+  plugins: [
+    goWasm({
+      async transform(_command, emit) {
+        return `
+          import '${WASM_EXEC_ID}';
+          import goWasm from '${WASM_BRIDGE_ID}';
+
+          const wasm = fetch(import.meta.ROLLUP_FILE_URL_${await emit()}).then((r) => r.arrayBuffer());
+          export default await goWasm(wasm);
+        `
+      },
+    }),
+  ],
+})
+```
+
+## Limitations
+
+- Go WebAssembly entrypoints must be `package main`.
+- Type declarations are not generated from Go source automatically.
+- Remote `*.d.ts` discovery is best-effort and depends on module-cache layout.
+- This package is ESM-only.
+
+## Developing This Repository
+
+From the repository root:
 
 ```bash
-# run from project root
-GOOS=js GOARCH=wasm go build -o dist/mypkg.wasm ./path/to/package
+pnpm install
+pnpm build
+pnpm start:example
 ```
 
-- Example: install a remote module to produce the artifact (plugin does `module@version` automatically):
+The example app lives in [packages/example-app](packages/example-app).
 
-```bash
-# plugin will run something like:
-go env GOMODCACHE
-GOBIN=./.gobuild/bin GOOS=js GOARCH=wasm go install example.com/remote/module@v1.2.3
-```
+## Troubleshooting
 
-The plugin attempts best-effort mapping between import -> module cache to copy any `*.d.ts` files that live inside the module. If your import mapping is non-standard, provide a custom `buildGoFile` in the plugin config to control the build process.
+`wasm_exec.js` cannot be found
 
-#### transform
+- Ensure the Go toolchain is installed.
+- Check that `go env GOROOT` works.
+- If needed, set `wasmExecPath` explicitly.
 
-`transform` allows you to modify the transformation process of this plugin. This option expecting signature:
+`no go.mod found for local go package`
 
-```ts
-(command: "build" | "serve", emit: () => Promise<string>, read: () => Promise<Buffer>) => Promise<string | undefined>
-```
+- Local `go:` imports are resolved relative to the importing file.
+- The plugin walks upward from that package until it finds a `go.mod`.
 
-- `command`: Taken directly from Vite runtime. Can be `command` or `serve`.
-- `emit`: Returns asset ID of the emitted go code. To make use of this ID, you have to prepend it with `import.meta.ROLLUP_FILE_URL_`. Then, you can load it via `fetch` or import it via `import` (need more tweaking to make the path acceptable).
+TypeScript cannot resolve `go:` imports
 
-```ts
-fetch("import.meta.ROLLUP_FILE_URL_" + await emit())
-```
+- Add a matching `*.d.ts` declaration.
+- If using `compilerOptions.types`, include `vite-plugin-golang-wasm-lite`.
 
-- `read`: Returns the contents of the file in `Buffer`. You can use `read` to load the file directly and inlined it into the resulting js file, for example: 
+Remote module builds do not expose types
 
-```ts
-fetch("data:application/wasm;base64," + Buffer.from(await read()).toString("base64"))
-```
-
-For example, in Cloudflare Worker environment, you can actually import wasm code directly via import syntax. So, you can give custom `transform` directive to load the wasm as asset instead of inlining it, and using import instead of fetch:
-
-```ts
-  return `
-    import '${WASM_EXEC_ID}';
-    import goWasm from '${WASM_BRIDGE_ID}';
-    
-    const wasm = await import("./" + "import.meta.ROLLUP_FILE_URL_" + await emit());
-    export default await goWasm(wasm);
-  `
-```
-
-Aside from transforming how the code loading, you can also use `transform` to provide or load your own bridge implementation or even exec implementation. Just don't import `WASM_EXEC_ID` or `WASM_BRIDGE_ID` and you can eject into your own implementation. 
+- The plugin only copies declarations if matching `*.d.ts` files are present in the module cache.
+- Use `buildGoFile` if you need stricter control over remote-module handling.
 
 ## Dependencies
 
-- `exit-hook` for catch-all solution to cleanup code, used to remove temporary directory:
-  https://github.com/slainless/vite-plugin-golang-wasm/blob/8afe0a48ac9dc1bb4b4b043576231c86ceacc1fa/src/temp_dir.ts#L26-L28
+- `exit-hook` is used to clean up temporary directories on process exit.
 
 ## License
 
-**MIT**
+MIT
 
----
-
-Originally created by [slainless](https://github.com/slainless), modified by [bearsh](https://github.com/bearsh)
+Originally created by [slainless](https://github.com/slainless), modified by [bearsh](https://github.com/bearsh).
