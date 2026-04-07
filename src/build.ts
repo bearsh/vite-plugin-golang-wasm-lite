@@ -157,8 +157,101 @@ const collectDeclarationFiles = (dir: string, depth = 0, maxDepth = 4): string[]
   return out
 }
 
-const copyDtsFile = (srcPath: string, destDir: string, rewriteModuleSpecifier?: string) => {
-  const name = basename(srcPath)
+const getRequestedRemotePathAndVersion = (requestedRemoteSpecifier: string): { path: string, version: string | null } => {
+  const at = requestedRemoteSpecifier.lastIndexOf('@')
+  if (at <= 0) {
+    return { path: requestedRemoteSpecifier, version: null }
+  }
+  return {
+    path: requestedRemoteSpecifier.slice(0, at),
+    version: requestedRemoteSpecifier.slice(at + 1)
+  }
+}
+
+const parseDeclaredGoModuleSpecifier = (content: string): string | null => {
+  const m = content.match(/declare\s+module\s+['\"](go:[^'\"]+)['\"]\s*\{/)
+  return m?.[1] ?? null
+}
+
+const toRelativeGoModulePath = (goModuleSpecifier: string | null): string | null => {
+  if (!goModuleSpecifier || !goModuleSpecifier.startsWith('go:')) return null
+  const raw = goModuleSpecifier.slice(3)
+  if (!raw.startsWith('./')) return null
+  const rel = raw.slice(2).replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  return rel || null
+}
+
+const toUniqueDtsFileName = (relDeclared: string | null, srcPath: string, cachePath: string): string => {
+  const base = basename(srcPath)
+
+  // Prefer declared package path to avoid collisions when multiple files share the same basename.
+  if (relDeclared) {
+    const prefix = relDeclared
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '')
+      .replace(/\/+$/, '')
+      .replace(/\//g, '__')
+    if (prefix) return `${prefix}__${base}`
+  }
+
+  // Fallback to cache-relative path-based name.
+  const rel = relative(cachePath, srcPath).replace(/\\/g, '/')
+  return rel.includes('/') ? rel.replace(/\//g, '__') : base
+}
+
+const buildRemoteRewritePlan = (
+  dtsFiles: string[],
+  cachePath: string,
+  requestedRemoteSpecifier: string
+): Array<{ srcPath: string, targetFileName: string, rewriteModuleSpecifier: string }> => {
+  const { path: requestedPath, version } = getRequestedRemotePathAndVersion(requestedRemoteSpecifier)
+
+  const details = dtsFiles.map((srcPath) => {
+    let declared: string | null = null
+    try {
+      declared = parseDeclaredGoModuleSpecifier(readFileSync(srcPath, 'utf8'))
+    } catch (_) {
+      declared = null
+    }
+    const relDeclared = toRelativeGoModulePath(declared)
+    return { srcPath, relDeclared }
+  })
+
+  // Pick the longest relative declaration that matches the requested path suffix.
+  // This lets us infer the module-root prefix for sibling package declarations.
+  let anchor: string | null = null
+  for (const d of details) {
+    if (!d.relDeclared) continue
+    if (requestedPath === d.relDeclared || requestedPath.endsWith('/' + d.relDeclared)) {
+      if (!anchor || d.relDeclared.length > anchor.length) {
+        anchor = d.relDeclared
+      }
+    }
+  }
+
+  const prefix = anchor
+    ? requestedPath.slice(0, requestedPath.length - anchor.length).replace(/\/+$/, '')
+    : ''
+
+  return details.map((d) => {
+    const targetFileName = toUniqueDtsFileName(d.relDeclared, d.srcPath, cachePath)
+
+    let rewritten = `go:${requestedRemoteSpecifier}`
+    if (prefix && d.relDeclared) {
+      const fullPath = [prefix, d.relDeclared].filter(Boolean).join('/').replace(/\/+/g, '/')
+      rewritten = `go:${fullPath}${version ? '@' + version : ''}`
+    }
+
+    return {
+      srcPath: d.srcPath,
+      targetFileName,
+      rewriteModuleSpecifier: rewritten
+    }
+  })
+}
+
+const copyDtsFile = (srcPath: string, destDir: string, rewriteModuleSpecifier?: string, targetFileName?: string) => {
+  const name = targetFileName || basename(srcPath)
   const targetPath = join(destDir, name)
 
   if (!rewriteModuleSpecifier) {
@@ -308,8 +401,14 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
         if (config.copyDts !== false) {
           try {
             const files = readdirSync(packageDir).filter(f => f.endsWith('.d.ts'))
+            const localDtsPrefix = relFromRoot
+              .replace(/\\/g, '/')
+              .replace(/^\/+/, '')
+              .replace(/\/+$/, '')
+              .replace(/\//g, '__')
             for (const f of files) {
-              copyDtsFile(join(packageDir, f), goDtsDir)
+              const targetName = localDtsPrefix ? `${localDtsPrefix}__${f}` : f
+              copyDtsFile(join(packageDir, f), goDtsDir, undefined, targetName)
             }
             ensureTypesPackageEntry(goDtsDir)
           } catch (_) {}
@@ -377,7 +476,10 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
                   viteConfig.logger.warn(`[go-build] no .d.ts found in module cache: ${cachePath}`)
                 } catch (_) {}
               }
-              for (const srcPath of dts) copyDtsFile(srcPath, goDtsDir, `go:${requestedRemoteSpecifier}`)
+              const plan = buildRemoteRewritePlan(dts, cachePath, requestedRemoteSpecifier)
+              for (const item of plan) {
+                copyDtsFile(item.srcPath, goDtsDir, item.rewriteModuleSpecifier, item.targetFileName)
+              }
               ensureTypesPackageEntry(goDtsDir)
             } else {
               try {
@@ -405,7 +507,10 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
                   viteConfig.logger.warn(`[go-build] no .d.ts found in module cache: ${cachePath}`)
                 } catch (_) {}
               }
-              for (const srcPath of dts) copyDtsFile(srcPath, goDtsDir, `go:${requestedRemoteSpecifier}`)
+              const plan = buildRemoteRewritePlan(dts, cachePath, requestedRemoteSpecifier)
+              for (const item of plan) {
+                copyDtsFile(item.srcPath, goDtsDir, item.rewriteModuleSpecifier, item.targetFileName)
+              }
               ensureTypesPackageEntry(goDtsDir)
             } else {
               try {
