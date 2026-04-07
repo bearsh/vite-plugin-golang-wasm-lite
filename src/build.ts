@@ -287,8 +287,9 @@ export const buildFile: GoBuilder = (viteConfig, config, id): Promise<string> =>
     mkdirSync(dirname(outputPath), { recursive: true })
     const args = ['build', ...(config.goArgs || []), '-o', outputPath, pkgArg]
 
-    // Run build in the package directory to ensure go finds the correct go.mod
-    const cwd = packageDir
+    // Run build at module root and pass package as relative arg.
+    // This avoids ending up in `<moduleRoot>/<pkg>` while also using `./<pkg>`.
+    const cwd = moduleRoot
 
     try { viteConfig.logger.info(`[go-build] local build cmd=${goBinExe} args=${JSON.stringify(args)} cwd=${cwd}`) } catch (_) {}
 
