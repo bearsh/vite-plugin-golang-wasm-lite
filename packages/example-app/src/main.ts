@@ -2,8 +2,8 @@
 import goMath from 'go:./math'
 import goMathCmplx from 'go:./math/cmplx'
 // or from a remote module (with optional version)
-//import goMath from 'go:github.com/bearsh/vite-plugin-golang-wasm-lite/packages/example-app/src/math@latest'
-//import goMath from 'go:github.com/bearsh/vite-plugin-golang-wasm-lite/packages/example-app/src/math/cmplx@latest'
+//import goMath from 'go:github.com/bearsh/vite-plugin-golang-wasm-lite/packages/example-app/src/math@258fafb'
+//import goMathCmplx from 'go:github.com/bearsh/vite-plugin-golang-wasm-lite/packages/example-app/src/math/cmplx@258fafb'
 
 import './demo.css';
 
